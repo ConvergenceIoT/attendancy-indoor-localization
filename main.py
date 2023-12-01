@@ -12,19 +12,35 @@ shared_data = []
 lock = asyncio.Lock()
 
 
-class Item(BaseModel):
-    item: Any
+class AudioConfig(BaseModel):
+    samplerate: int       # Recording Sample Rate
+    recordLength: int     # Recording Length in seconds
+    sleepTime: int        # Delay before playing chirp sound in milliseconds
+    statusCode: int
 
 
-@app.post("/add-data/")
-async def add_data(item: Item):
-    async with lock:  # Acquire lock before modifying the shared_data
-        shared_data.append(item)
-    return {"status": "Data added"}
+@app.post("/beacon/")
+async def receive_audio_config(audioConfig: AudioConfig):
+    if audioConfig.statusCode == 0:
+        print("Waiting mode")
+    elif audioConfig.statusCode == 1:
+        print("Beacon 1 and beepbeep")
+    elif audioConfig.statusCode == 2:
+        print("Beacon 2 and beepbeep")
+    elif audioConfig.statusCode == 3:
+        print("Beacon 3 and beepbeep")
+    elif audioConfig.statusCode == 4:
+        print("Beacon 4 and beepbeep")
+    elif audioConfig.statusCode == 99:
+        print("Local debug mode")
+    else:
+        print("Unknown status")
+
+    return {"status": "Beacon received", "data": audioConfig}
 
 
-@app.get("/get-data/")
-async def get_data():
-    return shared_data
+@app.post("/client/")
+async def receive_audio_config(audioConfig: AudioConfig):
+    return {"status": "Client received", "data": audioConfig}
 
 # Add more endpoints as needed
