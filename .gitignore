@@ -4,3 +4,4 @@
 /build
 pyproject.toml
 setup.py
+/wav

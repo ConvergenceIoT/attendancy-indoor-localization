@@ -6,6 +6,10 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import matlab.engine
 import uvicorn
+from scipy.io.wavfile import write
+import numpy as np
+from pathlib import Path
+import json
 
 app = FastAPI()
 eng = matlab.engine.start_matlab()
@@ -59,15 +63,21 @@ class StompListener(stomp.ConnectionListener):
                         f"Data added to client_data[{client_id}]:", message_data)
                 else:
                     print("Message does not contain an 'id' field")
+        except Exception as e:
+            print("An error occurred:", e)
         finally:
             lock.release()
 
 
 def run_stomp():
     global conn
-    conn = stomp.Connection()
+    # Specify the IP address and port of your ActiveMQ broker
+    # 61613 is the default port for STOMP
+    host_and_ports = [('10.210.60.168', 61613)]
+
+    conn = stomp.Connection(host_and_ports=host_and_ports)
     conn.set_listener('', StompListener())
-    conn.connect('admin', 'admin', wait=True)
+    conn.connect(wait=True)
     conn.subscribe(destination='/data/client', id=1, ack='auto')
     conn.subscribe(destination='/data/beacon/1', id=1, ack='auto')
     conn.subscribe(destination='/data/beacon/2', id=1, ack='auto')
@@ -145,7 +155,47 @@ async def refresh():
 async def rawToWav():
     global beacon_data, client_data
 
-    # iterate beacon, client and convert it to desired file
+    # Check if both dictionaries have entries with IDs 1 to 4
+    valid_ids = range(1, 5)
+    valid_beacon_ids = all(id in beacon_data for id in valid_ids)
+    valid_client_ids = all(id in client_data for id in valid_ids)
+
+    if not (valid_beacon_ids and valid_client_ids):
+        return {"status": "Not all required IDs (1-4) are present in beacon_data and client_data"}
+
+    wav_folder = Path('./wav')
+    wav_folder.mkdir(exist_ok=True)  # Create the folder if it doesn't exist
+
+    for data_type, data in [('client', client_data), ('beacon', beacon_data)]:
+        for i in valid_ids:  # IDs 1 to 4
+            raw_audio = np.array(data[i]['raw'], dtype=np.float32)
+            sample_rate = 48000  # Replace with actual sample rate
+
+            file_name = wav_folder / f"{data_type}-{i}.wav"
+            write(file_name, sample_rate, raw_audio)
+            print(f"Created {file_name}")
+
+    return {"status": "Conversion complete"}
+
+
+@app.get("/add-dummy")
+async def addDummy():
+    global beacon_data, client_data
+
+    dummy_folder = Path('./dummy')  # Path to the dummy folder
+
+    # Iterate over the dummy data files and add their contents to the appropriate dictionary
+    for file_path in dummy_folder.glob('*.json'):
+        with open(file_path, 'r') as file:
+            data = json.load(file)
+            if 'beacon' in file_path.stem:
+                beacon_id = int(file_path.stem.split('-')[1])
+                beacon_data[beacon_id] = data
+            elif 'client' in file_path.stem:
+                client_id = int(file_path.stem.split('-')[1])
+                client_data[client_id] = data
+
+    return {"status": "Dummy data added successfully"}
 
 
 @app.get("/run-matlab")
