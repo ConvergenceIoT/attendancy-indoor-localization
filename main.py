@@ -126,7 +126,7 @@ async def commandToClient(audioConfig: AudioConfig):
 async def rawToWav():
     global beacon_data, client_data
 
-    valid_ids = range(1, 4)
+    valid_ids = range(1, 5)
     valid_beacon_ids = all(id in beacon_data for id in valid_ids)
     valid_client_ids = all(id in client_data for id in valid_ids)
 
