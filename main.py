@@ -18,6 +18,10 @@ beacon_data = {}
 client_data = {}
 distances = {}
 
+# Environment Variable
+MESSAGE_QUEUE_HOST_AND_PORTS = [('10.210.61.235', 61613)]
+SERVER_HOST_AND_PORTS = ('127.0.0.1', 8000)
+
 
 class AudioConfig(BaseModel):
     samplerate: int
@@ -61,10 +65,9 @@ class StompListener(stomp.ConnectionListener):
 
 
 def run_stomp():
-    global conn
-    host_and_ports = [('192.168.0.2', 61613)]
+    global conn, HOST_AND_PORTS
 
-    conn = stomp.Connection(host_and_ports=host_and_ports)
+    conn = stomp.Connection(host_and_ports=MESSAGE_QUEUE_HOST_AND_PORTS)
     conn.set_listener('', StompListener())
     conn.connect(wait=True)
     conn.subscribe(destination='/topic//data/client', id=1, ack='auto')
@@ -119,19 +122,11 @@ async def commandToClient(audioConfig: AudioConfig):
     return {"status": "client published!", "data": audioConfig}
 
 
-@app.get("/refresh")
-async def refresh():
-    global beacon_data, client_data
-    beacon_data = {}
-    client_data = {}
-    return {"status": "refreshed!"}
-
-
 @app.get("/raw-to-wav")
 async def rawToWav():
     global beacon_data, client_data
 
-    valid_ids = range(1, 5)
+    valid_ids = range(1, 4)
     valid_beacon_ids = all(id in beacon_data for id in valid_ids)
     valid_client_ids = all(id in client_data for id in valid_ids)
 
@@ -172,7 +167,7 @@ async def addDummy():
     return {"status": "Dummy data added successfully"}
 
 
-@app.post("/run-matlab")
+@app.get("/run-matlab")
 async def calculate_distances():
     # Acquire lock to safely access and modify the distances dictionary
     distances_lock.acquire()
@@ -203,54 +198,42 @@ async def calculate_distances():
 def trilateration(beacon_positions):
     global distances
 
-    """
-    Calculate the user's position based on trilateration.
-    :param beacon_positions: Dictionary of beacon positions (x, y coordinates).
-    :param distances: Dictionary of distances from beacons.
-    :return: (x, y) coordinates of the user.
-    """
-    # Trilateration algorithm implementation
-    # For simplicity, this example assumes at least three beacons.
-    # You can extend this to handle more complex scenarios.
-    try:
-        distances_lock.acquire()
+    # Ensure there is sufficient data for trilateration
+    if len(beacon_positions) < 3 or len(distances) < 3:
+        raise ValueError("Insufficient data for trilateration")
 
-        if len(beacon_positions) < 3 or len(distances) < 3:
-            raise ValueError("Insufficient data for trilateration")
+    # Convert all keys in distances to integers, if they are strings
+    distances = {int(k): v for k, v in distances.items()}
+    beacon_positions = {int(k): v for k, v in beacon_positions.items()}
 
-        print(1)
+    # Select first three beacons for trilateration
+    # Ensure the selected beacons exist in both beacon_positions and distances
+    selected_beacons = [b for b in beacon_positions if b in distances]
+    if len(selected_beacons) < 3:
+        raise ValueError("Insufficient matching data for trilateration")
 
-        # TODO: 이 부분 수정!!
-        beacons = list(beacon_positions.keys())
-        print(beacons)
-        A = 2 * (beacon_positions[beacons[1]]['x'] -
-                 beacon_positions[beacons[0]]['x'])
-        B = 2 * (beacon_positions[beacons[1]]['y'] -
-                 beacon_positions[beacons[0]]['y'])
-        C = distances[beacons[0]]**2 - distances[beacons[1]]**2 \
-            - beacon_positions[beacons[0]]['x']**2 + beacon_positions[beacons[1]]['x']**2 \
-            - beacon_positions[beacons[0]]['y']**2 + \
-            beacon_positions[beacons[1]]['y']**2
-        D = 2 * (beacon_positions[beacons[2]]['x'] -
-                 beacon_positions[beacons[1]]['x'])
-        E = 2 * (beacon_positions[beacons[2]]['y'] -
-                 beacon_positions[beacons[1]]['y'])
-        F = distances[beacons[1]]**2 - distances[beacons[2]]**2 \
-            - beacon_positions[beacons[1]]['x']**2 + beacon_positions[beacons[2]]['x']**2 \
-            - beacon_positions[beacons[1]]['y']**2 + \
-            beacon_positions[beacons[2]]['y']**2
+    b1, b2, b3 = selected_beacons[:3]
 
-        print(2)
+    x1, y1 = beacon_positions[b1]['x'], beacon_positions[b1]['y']
+    x2, y2 = beacon_positions[b2]['x'], beacon_positions[b2]['y']
+    x3, y3 = beacon_positions[b3]['x'], beacon_positions[b3]['y']
 
-        if ((E * A) - (B * D)) == 0 or ((B * D) - (A * E)) == 0:
-            print("Zero Divison!")
-            raise ValueError("Zero Division")
+    r1, r2, r3 = distances[b1], distances[b2], distances[b3]
 
-        x = ((C * E) - (F * B)) / ((E * A) - (B * D))
-        y = ((C * D) - (A * F)) / ((B * D) - (A * E))
-        return x, y
-    finally:
-        distances_lock.release()
+    A = 2 * x2 - 2 * x1
+    B = 2 * y2 - 2 * y1
+    C = r1**2 - r2**2 - x1**2 + x2**2 - y1**2 + y2**2
+    D = 2 * x3 - 2 * x2
+    E = 2 * y3 - 2 * y2
+    F = r2**2 - r3**2 - x2**2 + x3**2 - y2**2 + y3**2
+
+    if (B * D - E * A) == 0:
+        raise ValueError("Cannot solve the equations (division by zero)")
+
+    x = (C * E - F * B) / (E * A - B * D)
+    y = (C * D - A * F) / (B * D - A * E)
+
+    return x, y
 
 
 @app.get("/trilateration")
@@ -270,13 +253,18 @@ async def perform_trilateration():
 
 @app.get("/check")
 async def check_data():
-    beacon_data_ids = list(beacon_data.keys())
-    client_data_ids = list(client_data.keys())
+    # Create new dictionaries excluding 'raw' data
+    beacon_data_without_raw = {id: {key: value for key, value in data.items() if key != 'raw'}
+                               for id, data in beacon_data.items()}
+    client_data_without_raw = {id: {key: value for key, value in data.items() if key != 'raw'}
+                               for id, data in client_data.items()}
 
     return {
-        "beacon_data_ids": beacon_data_ids,
-        "client_data_ids": client_data_ids
+        "beacon_data": beacon_data_without_raw,
+        "client_data": client_data_without_raw
     }
 
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app, host=SERVER_HOST_AND_PORTS[0], port=SERVER_HOST_AND_PORTS[1])
