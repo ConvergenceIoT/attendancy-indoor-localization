@@ -1,7 +1,6 @@
 import json
 import threading
 import stomp
-import threading
 from fastapi import FastAPI
 from pydantic import BaseModel
 import matlab.engine
@@ -9,14 +8,15 @@ import uvicorn
 from scipy.io.wavfile import write
 import numpy as np
 from pathlib import Path
-import json
 
 app = FastAPI()
 eng = matlab.engine.start_matlab()
 lock = threading.Lock()
+distances_lock = threading.Lock()
 
 beacon_data = {}
 client_data = {}
+distances = {}
 
 
 class AudioConfig(BaseModel):
@@ -27,40 +27,31 @@ class AudioConfig(BaseModel):
 
 
 class StompListener(stomp.ConnectionListener):
-    global beacon_data, client_data
-
     def on_error(self, frame):
         print('Received an error:', frame.body)
 
     def on_message(self, frame):
-        print('Received a message:', frame.body)
         lock.acquire()
         try:
             message_data = json.loads(frame.body)
             destination = frame.headers['destination']
 
-            if destination.startswith('/command/beacon/'):
-                # Extract beacon number from the destination
+            if destination.startswith('/topic//data/beacon/'):
                 beacon_number = destination.split('/')[-1]
                 try:
-                    # Convert beacon number to an integer
                     beacon_number = int(beacon_number)
-                    # Add message to beacon_data
                     beacon_data[beacon_number] = message_data
                     print(
-                        f"Data added to beacon_data[{beacon_number}]:", message_data)
+                        f"Data added to beacon_data[{beacon_number}]")
                 except ValueError:
                     print("Invalid beacon number in destination:", destination)
 
-            elif destination == '/command/client':
-                if client_data is None:
-                    client_data = {}
-
+            elif destination == '/topic//data/client':
                 client_id = message_data.get('id')
                 if client_id is not None:
                     client_data[client_id] = message_data
                     print(
-                        f"Data added to client_data[{client_id}]:", message_data)
+                        f"Data added to client_data[{client_id}]")
                 else:
                     print("Message does not contain an 'id' field")
         except Exception as e:
@@ -71,18 +62,16 @@ class StompListener(stomp.ConnectionListener):
 
 def run_stomp():
     global conn
-    # Specify the IP address and port of your ActiveMQ broker
-    # 61613 is the default port for STOMP
-    host_and_ports = [('10.210.60.168', 61613)]
+    host_and_ports = [('192.168.0.2', 61613)]
 
     conn = stomp.Connection(host_and_ports=host_and_ports)
     conn.set_listener('', StompListener())
     conn.connect(wait=True)
-    conn.subscribe(destination='/data/client', id=1, ack='auto')
-    conn.subscribe(destination='/data/beacon/1', id=1, ack='auto')
-    conn.subscribe(destination='/data/beacon/2', id=1, ack='auto')
-    conn.subscribe(destination='/data/beacon/3', id=1, ack='auto')
-    conn.subscribe(destination='/data/beacon/4', id=1, ack='auto')
+    conn.subscribe(destination='/topic//data/client', id=1, ack='auto')
+    conn.subscribe(destination='/topic//data/beacon/1', id=1, ack='auto')
+    conn.subscribe(destination='/topic//data/beacon/2', id=1, ack='auto')
+    conn.subscribe(destination='/topic//data/beacon/3', id=1, ack='auto')
+    conn.subscribe(destination='/topic//data/beacon/4', id=1, ack='auto')
     print("STOMP Connection established")
 
 
@@ -93,22 +82,16 @@ stomp_thread.start()
 @app.post("/command/both")
 async def commandToBeaconAndClient(audioConfig: AudioConfig):
     json_data = audioConfig.json()
-    if audioConfig.statusCode == 1:
-        conn.send(body=json_data, destination='/command/beacon/1')
-    elif audioConfig.statusCode == 2:
-        conn.send(body=json_data, destination='/command/beacon/2')
-    elif audioConfig.statusCode == 3:
-        conn.send(body=json_data, destination='/command/beacon/3')
-    elif audioConfig.statusCode == 4:
-        conn.send(body=json_data, destination='/command/beacon/4')
+    destinations = ['/topic//command/beacon/1', '/topic//command/beacon/2',
+                    '/topic//command/beacon/3', '/topic//command/beacon/4']
+    if 1 <= audioConfig.statusCode <= 4:
+        conn.send(body=json_data,
+                  destination=destinations[audioConfig.statusCode - 1])
     else:
-        # ready mode
-        conn.send(body=json_data, destination='/command/beacon/1')
-        conn.send(body=json_data, destination='/command/beacon/2')
-        conn.send(body=json_data, destination='/command/beacon/3')
-        conn.send(body=json_data, destination='/command/beacon/4')
+        for dest in destinations:
+            conn.send(body=json_data, destination=dest)
 
-    conn.send(body=json_data, destination='/command/client')
+    conn.send(body=json_data, destination='/topic//command/client')
 
     return {"status": "both(beacon, client) published!", "data": audioConfig}
 
@@ -116,20 +99,14 @@ async def commandToBeaconAndClient(audioConfig: AudioConfig):
 @app.post("/command/beacon")
 async def commandToBeacon(audioConfig: AudioConfig):
     json_data = audioConfig.json()
-    if audioConfig.statusCode == 1:
-        conn.send(body=json_data, destination='/command/beacon/1')
-    elif audioConfig.statusCode == 2:
-        conn.send(body=json_data, destination='/command/beacon/2')
-    elif audioConfig.statusCode == 3:
-        conn.send(body=json_data, destination='/command/beacon/3')
-    elif audioConfig.statusCode == 4:
-        conn.send(body=json_data, destination='/command/beacon/4')
+    destinations = ['/topic//command/beacon/1', '/topic//command/beacon/2',
+                    '/topic//command/beacon/3', '/topic//command/beacon/4']
+    if 1 <= audioConfig.statusCode <= 4:
+        conn.send(body=json_data,
+                  destination=destinations[audioConfig.statusCode - 1])
     else:
-        # ready mode
-        conn.send(body=json_data, destination='/command/beacon/1')
-        conn.send(body=json_data, destination='/command/beacon/2')
-        conn.send(body=json_data, destination='/command/beacon/3')
-        conn.send(body=json_data, destination='/command/beacon/4')
+        for dest in destinations:
+            conn.send(body=json_data, destination=dest)
 
     return {"status": "beacon published!", "data": audioConfig}
 
@@ -137,7 +114,7 @@ async def commandToBeacon(audioConfig: AudioConfig):
 @app.post("/command/client")
 async def commandToClient(audioConfig: AudioConfig):
     json_data = audioConfig.json()
-    conn.send(body=json_data, destination='/command/client')
+    conn.send(body=json_data, destination='/topic//command/client')
 
     return {"status": "client published!", "data": audioConfig}
 
@@ -147,7 +124,6 @@ async def refresh():
     global beacon_data, client_data
     beacon_data = {}
     client_data = {}
-
     return {"status": "refreshed!"}
 
 
@@ -155,7 +131,6 @@ async def refresh():
 async def rawToWav():
     global beacon_data, client_data
 
-    # Check if both dictionaries have entries with IDs 1 to 4
     valid_ids = range(1, 5)
     valid_beacon_ids = all(id in beacon_data for id in valid_ids)
     valid_client_ids = all(id in client_data for id in valid_ids)
@@ -164,12 +139,12 @@ async def rawToWav():
         return {"status": "Not all required IDs (1-4) are present in beacon_data and client_data"}
 
     wav_folder = Path('./wav')
-    wav_folder.mkdir(exist_ok=True)  # Create the folder if it doesn't exist
+    wav_folder.mkdir(exist_ok=True)
 
     for data_type, data in [('client', client_data), ('beacon', beacon_data)]:
-        for i in valid_ids:  # IDs 1 to 4
+        for i in valid_ids:
             raw_audio = np.array(data[i]['raw'], dtype=np.float32)
-            sample_rate = 48000  # Replace with actual sample rate
+            sample_rate = 48000
 
             file_name = wav_folder / f"{data_type}-{i}.wav"
             write(file_name, sample_rate, raw_audio)
@@ -182,9 +157,8 @@ async def rawToWav():
 async def addDummy():
     global beacon_data, client_data
 
-    dummy_folder = Path('./dummy')  # Path to the dummy folder
+    dummy_folder = Path('./dummy')
 
-    # Iterate over the dummy data files and add their contents to the appropriate dictionary
     for file_path in dummy_folder.glob('*.json'):
         with open(file_path, 'r') as file:
             data = json.load(file)
@@ -198,18 +172,111 @@ async def addDummy():
     return {"status": "Dummy data added successfully"}
 
 
-@app.get("/run-matlab")
-async def runMatlab(audioConfig: AudioConfig):
-    json_data = audioConfig.json()
-    conn.send(body=json_data, destination='/command/client')
+@app.post("/run-matlab")
+async def calculate_distances():
+    # Acquire lock to safely access and modify the distances dictionary
+    distances_lock.acquire()
+    try:
+        # Assuming beacon_data and client_data are already populated
+        for beacon_id in beacon_data:
+            if beacon_id in client_data:
+                # Extract speaker-to-microphone distances
+                clientSTMDistance = client_data[beacon_id]['micLength']
+                beaconSTMDistance = beacon_data[beacon_id]['micLength']
 
-    return {"status": "client published!", "data": audioConfig}
+                # Call MATLAB function
+                distance = eng.beepbeepdistance(
+                    beacon_id, clientSTMDistance, beaconSTMDistance, nargout=1)
+
+                # Update distances dictionary
+                distances[beacon_id] = distance
+
+        # Release lock after updating
+        distances_lock.release()
+        return {"status": "success", "distances": distances}
+    except Exception as e:
+        # Ensure the lock is released even if an exception occurs
+        distances_lock.release()
+        return {"status": "error", "message": str(e)}
 
 
-@app.get("/run-engine")
-async def runEngine():
-    eng.run('simple_beepbeep_tutorial_solution.m', nargout=0)
-    return {"status": "Engine Run!", "data": "yeah"}
+def trilateration(beacon_positions):
+    global distances
+
+    """
+    Calculate the user's position based on trilateration.
+    :param beacon_positions: Dictionary of beacon positions (x, y coordinates).
+    :param distances: Dictionary of distances from beacons.
+    :return: (x, y) coordinates of the user.
+    """
+    # Trilateration algorithm implementation
+    # For simplicity, this example assumes at least three beacons.
+    # You can extend this to handle more complex scenarios.
+    try:
+        distances_lock.acquire()
+
+        if len(beacon_positions) < 3 or len(distances) < 3:
+            raise ValueError("Insufficient data for trilateration")
+
+        print(1)
+
+        # TODO: 이 부분 수정!!
+        beacons = list(beacon_positions.keys())
+        print(beacons)
+        A = 2 * (beacon_positions[beacons[1]]['x'] -
+                 beacon_positions[beacons[0]]['x'])
+        B = 2 * (beacon_positions[beacons[1]]['y'] -
+                 beacon_positions[beacons[0]]['y'])
+        C = distances[beacons[0]]**2 - distances[beacons[1]]**2 \
+            - beacon_positions[beacons[0]]['x']**2 + beacon_positions[beacons[1]]['x']**2 \
+            - beacon_positions[beacons[0]]['y']**2 + \
+            beacon_positions[beacons[1]]['y']**2
+        D = 2 * (beacon_positions[beacons[2]]['x'] -
+                 beacon_positions[beacons[1]]['x'])
+        E = 2 * (beacon_positions[beacons[2]]['y'] -
+                 beacon_positions[beacons[1]]['y'])
+        F = distances[beacons[1]]**2 - distances[beacons[2]]**2 \
+            - beacon_positions[beacons[1]]['x']**2 + beacon_positions[beacons[2]]['x']**2 \
+            - beacon_positions[beacons[1]]['y']**2 + \
+            beacon_positions[beacons[2]]['y']**2
+
+        print(2)
+
+        if ((E * A) - (B * D)) == 0 or ((B * D) - (A * E)) == 0:
+            print("Zero Divison!")
+            raise ValueError("Zero Division")
+
+        x = ((C * E) - (F * B)) / ((E * A) - (B * D))
+        y = ((C * D) - (A * F)) / ((B * D) - (A * E))
+        return x, y
+    finally:
+        distances_lock.release()
+
+
+@app.get("/trilateration")
+async def perform_trilateration():
+    # Extract beacon positions from beacon_data
+    beacon_positions = {str(beacon_id): beacon_data[beacon_id]['position']
+                        for beacon_id in beacon_data}
+    try:
+        print("Beacon Positions:", beacon_positions)
+
+        x, y = trilateration(beacon_positions)
+        return {"status": "success", "x": x, "y": y}
+    except Exception as e:
+        print("Error in trilateration:", e)  # Debug: Print the error
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/check")
+async def check_data():
+    beacon_data_ids = list(beacon_data.keys())
+    client_data_ids = list(client_data.keys())
+
+    return {
+        "beacon_data_ids": beacon_data_ids,
+        "client_data_ids": client_data_ids
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
