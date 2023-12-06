@@ -8,6 +8,7 @@ import uvicorn
 from scipy.io.wavfile import write
 import numpy as np
 from pathlib import Path
+from datetime import datetime
 
 app = FastAPI()
 eng = matlab.engine.start_matlab()
@@ -148,6 +149,42 @@ async def rawToWav():
     return {"status": "Conversion complete"}
 
 
+@app.get("/raw-backup")
+async def rawBackup():
+    global beacon_data, client_data
+
+    valid_ids = range(1, 5)
+    valid_beacon_ids = all(id in beacon_data for id in valid_ids)
+    valid_client_ids = all(id in client_data for id in valid_ids)
+
+    if not (valid_beacon_ids and valid_client_ids):
+        return {"status": "Not all required IDs (1-4) are present in beacon_data and client_data"}
+
+    current_date = datetime.now().strftime("%d-%H-%M-%S")
+
+    wav_folder = Path(f'./backup/{current_date}/wav')
+    wav_folder.mkdir(parents=True, exist_ok=True)
+    json_folder = Path(f'./backup/{current_date}/json')
+    json_folder.mkdir(parents=True, exist_ok=True)
+
+    for data_type, data in [('client', client_data), ('beacon', beacon_data)]:
+        for i in valid_ids:
+            raw_audio = np.array(data[i]['raw'], dtype=np.float32)
+            sample_rate = 48000
+
+            file_name = wav_folder / f"{data_type}-{i}.wav"
+            write(file_name, sample_rate, raw_audio)
+            print(f"Created {file_name}")
+
+            # Create and write the JSON file
+            json_file_name = json_folder / f"{data_type}-{i}.json"
+            with open(json_file_name, 'w') as json_file:
+                json.dump(data[i], json_file)
+            print(f"Created {json_file_name}")
+
+    return {"status": "Conversion complete"}
+
+
 @app.get("/add-dummy")
 async def addDummy():
     global beacon_data, client_data
@@ -262,6 +299,21 @@ async def check_data():
     return {
         "beacon_data": beacon_data_without_raw,
         "client_data": client_data_without_raw
+    }
+
+
+@app.get("/clear")
+async def clear_data():
+    global beacon_data, client_data, distances
+
+    beacon_data = {}
+    client_data = {}
+    distances = {}
+
+    return {
+        "beacon_data": beacon_data,
+        "client_data": client_data,
+        "distances": distances
     }
 
 

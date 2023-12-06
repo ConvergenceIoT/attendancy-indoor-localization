@@ -5,3 +5,5 @@
 pyproject.toml
 setup.py
 /wav
+/dummy
+/backup
