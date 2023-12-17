@@ -4,14 +4,14 @@ rate = 48000; % sampling rate
 
 % A chirp signal of 1 second 
 % with a freq range of [1, 18]kHz 
-x = audioread('./wav/chirp.wav');
+x = audioread('/Users/parkgwanbin/CAU/20230402-7/iot/attendancy-indoor-localization/wav/chirp.wav');
 
 % Load data received by two different devices
 y = struct();
 y(1).raw = audioread(...
-    ['./wav/client-', num2str(groundTruth), '.wav']);
+    ['/Users/parkgwanbin/CAU/20230402-7/iot/attendancy-indoor-localization/wav/client-', num2str(groundTruth), '.wav']);
 y(2).raw = audioread(...
-    ['./wav/beacon-', num2str(groundTruth), '.wav']);
+    ['/Users/parkgwanbin/CAU/20230402-7/iot/attendancy-indoor-localization/wav/beacon-', num2str(groundTruth), '.wav']);
 
 for i = 1:2
     y(i).h = xcorr(y(i).raw, x);
